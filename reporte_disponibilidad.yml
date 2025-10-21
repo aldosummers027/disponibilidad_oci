@@ -1,0 +1,73 @@
+---
+- name: Generar Reporte de Disponibilidad de VMs en OCI
+  hosts: localhost
+  connection: local
+  
+  vars:
+    tenancy_ocid: "ocid1.tenancy.oc1..aaaaaaaadubbgctqd2ycibpstffwccwb4m4xfcccbfjhu3yldelqprhfzuxq"
+    output_csv_file: "reporte_disponibilidad_vms.csv"
+
+  tasks:
+    - name: Paso 1 - Obtener TODOS los compartimentos
+      oracle.oci.oci_identity_compartment_facts:
+        parent_compartment_id: "{{ tenancy_ocid }}"
+        access_level: "ANY"
+        compartment_id_in_subtree: true
+      register: all_compartments_result
+
+    - name: Paso 2 - Crear mapa de ID de Compartimento a Nombre
+      ansible.builtin.set_fact:
+        compartment_name_map: "{{ all_compartments_result.compartments | items2dict(key_name='id', value_name='name') }}"
+      run_once: true
+
+    - name: Paso 3 - Crear mapa de ID de Compartimento a ID de Padre
+      ansible.builtin.set_fact:
+        compartment_parent_id_map: "{{ all_compartments_result.compartments | items2dict(key_name='id', value_name='compartment_id') }}"
+      run_once: true
+
+    - name: Paso 4 - Calcular fechas y horas totales del mes pasado
+      ansible.builtin.shell: |
+        START_TIME=$(date -u -d "$(date +%Y-%m-01) -1 month" +%Y-%m-%dT00:00:00Z)
+        END_TIME=$(date -u -d "$(date +%Y-%m-01) -1 second" +%Y-%m-%dT%H:%M:%SZ)
+        START_SECS=$(date -d "$START_TIME" +%s)
+        END_SECS=$(date -d "$END_TIME" +%s)
+        TOTAL_HOURS=$(( ( $END_SECS - $START_SECS ) / 3600 + 1 ))
+        echo "START_TIME=${START_TIME}"
+        echo "END_TIME=${END_TIME}"
+        echo "TOTAL_HOURS=${TOTAL_HOURS}"
+      register: date_vars_raw
+      run_once: true
+      changed_when: false
+
+    - name: Paso 5 - Registrar variables de fecha y hora
+      ansible.builtin.set_fact:
+        start_time: "{{ date_vars_raw.stdout | regex_search('START_TIME=(.*)', '\\1') | first }}"
+        end_time: "{{ date_vars_raw.stdout | regex_search('END_TIME=(.*)', '\\1') | first }}"
+        total_hours: "{{ date_vars_raw.stdout | regex_search('TOTAL_HOURS=(.*)', '\\1') | first | int }}"
+      run_once: true
+
+    - name: Paso 6 - Crear el archivo CSV y escribir la cabecera
+      ansible.builtin.copy:
+        dest: "{{ output_csv_file }}"
+        content: "compartment_name,subcompartment,VM_name,Active_hours,Total_hours,Availability"
+        force: yes
+      run_once: true
+
+    - name: Paso 7 - Obtener todas las VMs de todos los compartimentos
+      oracle.oci.oci_compute_instance_facts:
+        compartment_id: "{{ item.id }}"
+      loop: "{{ all_compartments_result.compartments }}"
+      register: instances_data_raw
+
+    - name: Paso 8 - Unificar la lista de VMs
+      ansible.builtin.set_fact:
+        all_vms: "{{ instances_data_raw.results | map(attribute='instances') | flatten }}"
+      run_once: true
+
+    - name: Paso 9 - Procesar la disponibilidad de cada VM
+      # Llamamos al archivo secundario por cada VM encontrada
+      ansible.builtin.include_tasks: process_vm_availability.yml
+      loop: "{{ all_vms }}"
+      loop_control:
+        loop_var: vm
+      when: vm.lifecycle_state != 'TERMINATED'
