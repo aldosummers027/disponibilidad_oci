@@ -4,7 +4,8 @@ pipeline {
     environment {
         VENV_PATH = "/home/ubuntu/ansible_venv/bin/activate"
         PLAYBOOK_NAME = "reporte_disponibilidad.yml" 
-        OCI_PROFILE = "DEFAULT" 
+        OCI_PROFILE = "DEFAULT"
+        OUTPUT_CSV_FILE = "reporte_disponibilidad_oci.csv"
     }
 
     stages {
@@ -22,7 +23,7 @@ pipeline {
                 
                 sh """
                     source ${env.VENV_PATH}
-                    OCI_CONFIG_PROFILE="${env.OCI_PROFILE}" ansible-playbook ${env.PLAYBOOK_NAME}
+                    OCI_CONFIG_PROFILE="${env.OCI_PROFILE}" ansible-playbook ${env.PLAYBOOK_NAME} --extra-vars "output_csv_file=${env.OUTPUT_CSV_FILE}"
                 """
             }
         }
@@ -30,7 +31,7 @@ pipeline {
         stage('Archive Artifacts') {
             steps {
                 echo 'Archivando el reporte CSV generado...'
-                archiveArtifacts artifacts: 'reporte_disponibilidad_oci.csv', fingerprint: true
+                archiveArtifacts artifacts: "${env.OUTPUT_CSV_FILE}", fingerprint: true
             }
         }
     }

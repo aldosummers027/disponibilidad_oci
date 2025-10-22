@@ -5,7 +5,7 @@
   gather_facts: no
   vars:
     tenancy_ocid: "ocid1.tenancy.oc1..aaaaaaaadubbgctqd2ycibpstffwccwb4m4xfcccbfjhu3yldelqprhfzuxq"
-    output_csv_file: "./reporte_horas_final_{{ now(fmt='%Y-%m-%d') }}.csv"
+    output_csv_file: "{{ output_csv_file | default('./reporte_horas_final_' ~ now(fmt='%Y-%m-%d') ~ '.csv') }}"
     total_hours: 720
 
     hoy: "{{ now(utc=True) }}"
