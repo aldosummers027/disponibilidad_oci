@@ -1,11 +1,20 @@
 ---
-- name: Generar Reporte de Disponibilidad de VMs en OCI
+- name: Generar Reporte Final de Horas de Actividad para TODAS las VMs
   hosts: localhost
   connection: local
-  
+  gather_facts: no
   vars:
     tenancy_ocid: "ocid1.tenancy.oc1..aaaaaaaadubbgctqd2ycibpstffwccwb4m4xfcccbfjhu3yldelqprhfzuxq"
-    output_csv_file: "reporte_disponibilidad_vms.csv"
+    output_csv_file: "./reporte_horas_final_{{ now(fmt='%Y-%m-%d') }}.csv"
+    total_hours: 720
+
+    hoy: "{{ now(utc=True) }}"
+    mes_pasado: >-
+      {% if hoy.month == 1 %}12{% else %}{{ hoy.month - 1 }}{% endif %}
+    ano_de_mes_pasado: >-
+      {% if hoy.month == 1 %}{{ hoy.year - 1 }}{% else %}{{ hoy.year }}{% endif %}
+    start_time: "{{ ano_de_mes_pasado }}-{{ '%02d' | format(mes_pasado|int) }}-01T00:00:00Z"
+    end_time: "{{ hoy.strftime('%Y-%m-01') }}T00:00:00Z"
 
   tasks:
     - name: Paso 1 - Obtener TODOS los compartimentos
@@ -23,27 +32,6 @@
     - name: Paso 3 - Crear mapa de ID de Compartimento a ID de Padre
       ansible.builtin.set_fact:
         compartment_parent_id_map: "{{ all_compartments_result.compartments | items2dict(key_name='id', value_name='compartment_id') }}"
-      run_once: true
-
-    - name: Paso 4 - Calcular fechas y horas totales del mes pasado
-      ansible.builtin.shell: |
-        START_TIME=$(date -u -d "$(date +%Y-%m-01) -1 month" +%Y-%m-%dT00:00:00Z)
-        END_TIME=$(date -u -d "$(date +%Y-%m-01) -1 second" +%Y-%m-%dT%H:%M:%SZ)
-        START_SECS=$(date -d "$START_TIME" +%s)
-        END_SECS=$(date -d "$END_TIME" +%s)
-        TOTAL_HOURS=$(( ( $END_SECS - $START_SECS ) / 3600 + 1 ))
-        echo "START_TIME=${START_TIME}"
-        echo "END_TIME=${END_TIME}"
-        echo "TOTAL_HOURS=${TOTAL_HOURS}"
-      register: date_vars_raw
-      run_once: true
-      changed_when: false
-
-    - name: Paso 5 - Registrar variables de fecha y hora
-      ansible.builtin.set_fact:
-        start_time: "{{ date_vars_raw.stdout | regex_search('START_TIME=(.*)', '\\1') | first }}"
-        end_time: "{{ date_vars_raw.stdout | regex_search('END_TIME=(.*)', '\\1') | first }}"
-        total_hours: "{{ date_vars_raw.stdout | regex_search('TOTAL_HOURS=(.*)', '\\1') | first | int }}"
       run_once: true
 
     - name: Paso 6 - Crear el archivo CSV y escribir la cabecera
@@ -65,7 +53,6 @@
       run_once: true
 
     - name: Paso 9 - Procesar la disponibilidad de cada VM
-      # Llamamos al archivo secundario por cada VM encontrada
       ansible.builtin.include_tasks: process_vm_availability.yml
       loop: "{{ all_vms }}"
       loop_control:

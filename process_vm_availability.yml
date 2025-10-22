@@ -1,46 +1,42 @@
 ---
-# Este archivo es llamado por 'reporte_disponibilidad.yml' para cada VM.
 
 - name: "Procesando VM: {{ vm.display_name }}"
+  vars:
+    parent_id: "{{ compartment_parent_id_map[vm.compartment_id] | default(tenancy_ocid) }}"
+    compartment_name: "{{ compartment_name_map[vm.compartment_id] | default('N/A') }}"
+    parent_compartment_name: "{{ compartment_name_map[parent_id] | default('N/A') }}"
   block:
-    - name: "Obtener CONTEO de métricas de CPU (Agente) para {{ vm.display_name }}"
+    - name: "Obtener métricas de estado de la instancia para {{ vm.display_name }}"
       oracle.oci.oci_monitoring_metric_data_actions:
         action: summarize_metrics_data
         compartment_id: "{{ vm.compartment_id }}"
-        namespace: "oci_computeagent"
-        query: 'CpuUtilization[1h]{resourceId = "{{ vm.id }}"}.count()'
+        namespace: "oci_compute_instance_health"
+        query: "InstanceAccessibilityStatus[1h]{resourceId = {{ vm.id | to_json }}}.count()"
         start_time: "{{ start_time }}"
         end_time: "{{ end_time }}"
       register: metric_count_data
       ignore_errors: true
 
-    - name: "Paso Intermedio: Extraer lista de datapoints y ID de padre"
-      ansible.builtin.set_fact:
-        # Guardamos la lista completa de datapoints
-        all_datapoints_list: "{{ (metric_count_data.metric_data_summary[0].aggregated_datapoints) if (metric_count_data.metric_data_summary is defined and metric_count_data.metric_data_summary | length > 0) else [] }}"
-        parent_id: "{{ compartment_parent_id_map[vm.compartment_id] | default(tenancy_ocid) }}"
+    - name: "DEBUG - Imprimir en pantalla metric_count_data"
+      debug:
+        var: metric_count_data
 
     - name: "Calcular horas activas"
       ansible.builtin.set_fact:
-        # --- LÓGICA CORREGIDA ---
-        # Las horas activas son la cantidad de datapoints devueltos (uno por hora)
-        active_hours: "{{ all_datapoints_list | length }}"
-        
-    - name: "Calcular disponibilidad y nombres de compartimentos"
+        active_hours: "{{ (metric_count_data.metric_data[0].aggregated_datapoints | default([])) | length if (metric_count_data.metric_data is defined and metric_count_data and metric_count_data.metric_data | length > 0) else 0 }}"
+
+    - name: "Calcular disponibilidad"
       ansible.builtin.set_fact:
-        availability_pct: "{{ '%.2f' | format((active_hours | float / total_hours | float) * 100) if total_hours > 0 else 0.00 }}"
-        vm_compartment_name: "{{ compartment_name_map[vm.compartment_id] | default('N/A') }}"
-        parent_compartment_name: "{{ compartment_name_map[parent_id] | default('ROOT') }}"
+        availability_percentage: "{{ '%.2f' | format( (active_hours | float * 100) / (total_hours | float) ) if total_hours | float > 0 else '0.00' }}"
 
     - name: "Escribir línea en CSV para {{ vm.display_name }}"
       ansible.builtin.lineinfile:
         path: "{{ output_csv_file }}"
-        line: "{{ parent_compartment_name }},{{ vm_compartment_name }},{{ vm.display_name }},{{ active_hours }},{{ total_hours }},{{ availability_pct }}%"
+        line: "{{ parent_compartment_name }},{{ compartment_name }},{{ vm.display_name }},{{ active_hours }},{{ total_hours }},{{ availability_percentage }}%"
       delegate_to: localhost
-
   rescue:
     - name: "FALLO al procesar VM: {{ vm.display_name }}"
       ansible.builtin.lineinfile:
         path: "{{ output_csv_file }}"
-        line: "ERROR,ERROR,{{ vm.display_name }},0,{{ total_hours }},0.00%"
+        line: "{{ parent_compartment_name }},{{ compartment_name }},{{ vm.display_name }},0,{{ total_hours }},0.00%"
       delegate_to: localhost
